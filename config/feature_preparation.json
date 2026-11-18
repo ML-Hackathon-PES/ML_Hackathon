@@ -1,0 +1,30 @@
+{
+  "maximum_speed_mps": 150.0,
+  "coordinate_order": [
+    "longitude",
+    "latitude"
+  ],
+  "cleaning": [
+    "valid finite longitude and latitude",
+    "valid finite timestamp",
+    "strictly increasing timestamps",
+    "remove exact duplicate observations",
+    "remove observations with speed above 150 m/s"
+  ],
+  "features": [
+    "longitude",
+    "latitude",
+    "timestamp_seconds",
+    "delta_time_seconds",
+    "delta_longitude_degrees",
+    "delta_latitude_degrees",
+    "step_distance_meters",
+    "speed_meters_per_second",
+    "cumulative_distance_meters",
+    "speed_suspicious"
+  ],
+  "distance_method": "Haversine great-circle distance",
+  "candidate_generation": "not performed",
+  "route_reconstruction": "not performed",
+  "model_training": "not performed"
+}

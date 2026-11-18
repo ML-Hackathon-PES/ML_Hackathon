@@ -1,0 +1,17 @@
+{
+  "alignment_method": "nearest route arc to each GPS observation within radius",
+  "alignment_radius_meters": 100.0,
+  "reference_arc_source": "sequential arc IDs from each trip .route file",
+  "positive_label": "candidate arc equals nearest route arc",
+  "negative_label": "candidate arc differs from nearest route arc",
+  "unlabeled_policy": "leave candidate rows unlabeled when no route arc aligns to the GPS",
+  "candidate_miss_policy": "record reference arc misses separately; never fabricate positive labels",
+  "sequence_assumption": "route arc sequence is used as reference set, while GPS-to-arc association is spatial",
+  "evaluator_policy": "evaluator partitions and labels are never read",
+  "limitations": [
+    "route row count is not assumed to equal GPS row count",
+    "a route arc may be nearest to no GPS observation",
+    "one GPS observation can align to only one nearest route arc",
+    "spatial alignment does not establish exact turn-level route state"
+  ]
+}
