@@ -1,9 +1,0 @@
-{
-  "search_radius_meters": 100.0,
-  "maximum_candidates": 5,
-  "coordinate_system": "local equirectangular meter projection plus Haversine segment length",
-  "spatial_index": "SciPy cKDTree over arc midpoints",
-  "candidate_selection": "Arcs within radius, sorted by segment distance then arc ID",
-  "candidate_miss_policy": "Record observations with zero candidates; do not fabricate an arc",
-  "evaluator_label_policy": "No evaluator labels or evaluator partitions are read"
-}

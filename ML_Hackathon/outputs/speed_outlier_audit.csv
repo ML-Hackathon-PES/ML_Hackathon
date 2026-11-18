@@ -1,2 +1,0 @@
-partition,trip_id,observation_index,timestamp_seconds,longitude,latitude,speed_meters_per_second,threshold_mps,disposition
-train,00000079,90,91.0,37.548772,55.792865,180.13827529603108,150.0,preserved_and_flagged
