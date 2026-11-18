@@ -1,14 +1,16 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// Laptop 2 sets API_TARGET to the API address on Laptop 1.
+const apiTarget = process.env.API_TARGET || 'http://localhost:8000'
+
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
     proxy: {
-      // Proxy API calls to FastAPI backend (update URL when backend is ready)
       '/api': {
-        target: 'http://localhost:8000',
+        target: apiTarget,
         changeOrigin: true,
       },
     },
