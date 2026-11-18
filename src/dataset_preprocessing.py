@@ -313,7 +313,7 @@ def run_preprocessing(dataset_root: Path, output_dir: Path) -> None:
             "valid finite timestamp",
             "strictly increasing timestamps",
             "remove exact duplicate observations",
-            "remove observations with speed above 150 m/s",
+            "preserve observations with speed above 150 m/s and flag them with speed_suspicious=1",
         ],
         "features": [
             "longitude",

@@ -38,18 +38,16 @@ Student folder/
 *.route
 
 # =============================================================================
-# Large or incomplete generated outputs — regenerable from scripts
+# Large generated outputs — reproducible from scripts and shared outside Git
 # =============================================================================
 # Full GPS feature table (33 MB, regenerable via dataset_preprocessing.py)
 outputs/gps_feature_table.csv
 
-# Candidate table: currently incomplete (13/90 trips only). Exclude to avoid
-# misleading teammates. Regenerate with candidate_generation.py after fixing
-# the --dataset-root argument.
+# Candidate-level outputs for all 90 trips. Keep the large generated tables out
+# of Git; distribute a validated, checksummed bundle through team storage.
 outputs/candidate_table.csv
 
-# Downstream outputs that do not exist yet (excluded so Git does not
-# accidentally pick them up if partially generated in the future)
+# Candidate features, labels, summaries, and validation reports
 outputs/candidate_feature_table.csv
 outputs/candidate_labels.csv
 outputs/candidate_generation_summary.csv
