@@ -36,7 +36,7 @@ def run_validation(repository_root: Path, report_output_dir: Path | None = None)
     invalid_candidate_node_refs = 0
     missing_feature_rows = 0
 
-    dataset_root = repository_root.parent / "Student folder"
+    dataset_root = repository_root / "Student folder" / "Student folder"
     arc_counts = {}
     node_counts = {}
     for partition in ("train", "student_test"):
