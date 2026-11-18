@@ -33,7 +33,7 @@ PathSnap/
 
 1. Clone & Setup Virtual Environment
 
-git clone https://github.com/your-team/pathsnap.git
+git clone https://github.com/ML-Hackathon-PES/ML_Hackathon.git
 cd pathsnap
 python -m venv venv
 
