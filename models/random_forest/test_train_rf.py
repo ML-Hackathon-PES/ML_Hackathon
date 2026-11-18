@@ -49,14 +49,17 @@ def build_tables():
                            "observation_index": obs, "arc_id": rank}
                     feats.append({**key, **row})
                     labels.append({**key, "label": int(positive) if aligned else ""})
-    gps = pd.DataFrame(gps, columns=["partition", "trip_id", "observation_index"])
-    return gps, pd.DataFrame(feats), pd.DataFrame(labels), train_ids
+    summary = (pd.DataFrame(gps, columns=["partition", "trip_id", "observation_index"])
+               .groupby(["partition", "trip_id"]).size()
+               .reset_index(name="gps_observations"))
+    return summary, pd.DataFrame(feats), pd.DataFrame(labels), train_ids
 
 
 def run_script(work, features, labels, *extra):
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--features", str(work / features),
-         "--labels", str(work / labels), "--gps", str(work / "gps.csv"),
+         "--labels", str(work / labels),
+         "--candidate-summary", str(work / "candidate_summary.csv"),
          "--folds", str(FOLDS), "--out", str(work / "out"), *extra],
         capture_output=True, text=True)
 
@@ -102,10 +105,10 @@ def check_incomplete_tables_stop(work, feats, labels, train_ids):
 
 
 def main():
-    gps, feats, labels, train_ids = build_tables()
+    summary, feats, labels, train_ids = build_tables()
     with tempfile.TemporaryDirectory() as folder:
         work = Path(folder)
-        gps.to_csv(work / "gps.csv", index=False)
+        summary.to_csv(work / "candidate_summary.csv", index=False)
         feats.to_csv(work / "features.csv", index=False)
         labels.to_csv(work / "labels.csv", index=False)
         check_successful_run(work, feats)

@@ -9,7 +9,7 @@ Only labeled candidates are used for fitting and metrics. Every candidate gets a
 probability, including those at GPS points with no aligned reference route, so
 the HMM/Viterbi step has emissions for the whole trip.
 
-Usage (from the repository root, after pipeline steps 1-5 in README.md):
+Usage (from the repository root, with the tables in PathSnap_Validated_Dataset/):
     python models/random_forest/train_rf.py
 
 Add --no-tune to train only the baseline configuration.
@@ -85,8 +85,11 @@ def load_data(features_path, labels_path):
     return df
 
 
-def load_gps_observations(path):
-    return pd.read_csv(path, usecols=OBSERVATION_KEYS, dtype={"trip_id": str})
+def load_candidate_summary(path):
+    """Per-trip GPS observation counts from candidate generation."""
+    summary = pd.read_csv(path, usecols=["partition", "trip_id", "gps_observations"],
+                          dtype={"trip_id": str})
+    return summary[summary.partition.isin(["train", "student_test"])]
 
 
 def load_folds(path, train_trips):
@@ -103,10 +106,10 @@ def load_folds(path, train_trips):
     return folds
 
 
-def require_complete_trips(df, gps):
+def require_complete_trips(df, summary):
     """Stop on partial tables, such as an interrupted candidate generation run."""
     labeled = df[df["label"].notna()]
-    expected = set(map(tuple, gps[["partition", "trip_id"]].drop_duplicates().values))
+    expected = set(map(tuple, summary[["partition", "trip_id"]].values))
     found = set(map(tuple, labeled[["partition", "trip_id"]].drop_duplicates().values))
     missing = sorted(expected - found)
     if missing:
@@ -128,19 +131,20 @@ def true_arc_not_in_candidates_rate(df):
     return float((g == 0).mean())
 
 
-def coverage_metrics(candidates, gps):
+def coverage_metrics(candidates, summary):
     """Coverage over all cleaned GPS points of the evaluated trips."""
+    total = int(summary["gps_observations"].sum())
     with_candidates = len(candidates[OBSERVATION_KEYS].drop_duplicates())
     labeled = candidates.loc[candidates["label"].notna(), OBSERVATION_KEYS]
     return {
-        "gps_observations": len(gps),
+        "gps_observations": total,
         # Same definition as candidate_generation_summary.csv.
-        "candidate_miss_rate": 1 - with_candidates / len(gps),
-        "labeled_observation_coverage": len(labeled.drop_duplicates()) / len(gps),
+        "candidate_miss_rate": 1 - with_candidates / total,
+        "labeled_observation_coverage": len(labeled.drop_duplicates()) / total,
     }
 
 
-def evaluate(candidates, prob, gps):
+def evaluate(candidates, prob, summary):
     """Score labeled candidates and report coverage for the same trips."""
     mask = candidates["label"].notna().values
     df, p = candidates[mask], prob[mask]
@@ -155,7 +159,7 @@ def evaluate(candidates, prob, gps):
         "log_loss": log_loss(y, np.clip(p, 1e-15, 1 - 1e-15), labels=[0, 1]),
         "top1_accuracy": top1_accuracy(df, p),
         "true_arc_not_in_candidates_rate": true_arc_not_in_candidates_rate(df),
-        **coverage_metrics(candidates, gps),
+        **coverage_metrics(candidates, summary),
     }
 
 
@@ -167,7 +171,7 @@ def fit_model(rows, params):
     return model, time.time() - t0
 
 
-def cross_validate(train, train_gps, folds, params):
+def cross_validate(train, train_summary, folds, params):
     """Return per-fold metrics and an out-of-fold probability for each candidate."""
     rows = []
     oof = np.full(len(train), np.nan)
@@ -179,20 +183,20 @@ def cross_validate(train, train_gps, folds, params):
         model, fit_seconds = fit_model(train[train.trip_id.isin(tr_trips)], params)
         prob = model.predict_proba(va[FEATURES])[:, 1]
         oof[va_mask] = prob
-        res = evaluate(va, prob, train_gps[train_gps.trip_id.isin(va_trips)])
+        res = evaluate(va, prob, train_summary[train_summary.trip_id.isin(va_trips)])
         res.update(fold=int(fold), train_trips=len(tr_trips), val_trips=len(va_trips),
                    fit_seconds=fit_seconds)
         rows.append(res)
     return pd.DataFrame(rows), oof
 
 
-def tune(train, train_gps, folds, options):
+def tune(train, train_summary, folds, options):
     """Pick the option with the lowest mean validation log loss."""
     best = None
     results = []
     for number, option in enumerate(options, start=1):
         params = {**BASE_PARAMS, **option}
-        cv, oof = cross_validate(train, train_gps, folds, params)
+        cv, oof = cross_validate(train, train_summary, folds, params)
         score = cv["log_loss"].mean()
         results.append({"option": json.dumps(option), "mean_log_loss": score,
                         "std_log_loss": cv["log_loss"].std(),
@@ -238,37 +242,38 @@ def save_plots(out, test, test_prob, cv, model):
 
 def main():
     outputs = REPO_ROOT / "outputs"
+    data = REPO_ROOT / "PathSnap_Validated_Dataset"
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--features", type=Path, default=outputs / "candidate_feature_table.csv")
-    ap.add_argument("--labels", type=Path, default=outputs / "candidate_labels.csv")
-    ap.add_argument("--gps", type=Path, default=outputs / "gps_feature_table.csv")
+    ap.add_argument("--features", type=Path, default=data / "candidate_feature_table.csv")
+    ap.add_argument("--labels", type=Path, default=data / "candidate_labels.csv")
+    ap.add_argument("--candidate-summary", type=Path,
+                    default=data / "candidate_generation_summary.csv")
     ap.add_argument("--folds", type=Path, default=outputs / "cross_validation_folds.csv")
     ap.add_argument("--out", type=Path, default=outputs / "random_forest")
     ap.add_argument("--no-tune", action="store_true", help="train only the baseline")
     args = ap.parse_args()
-    for path in (args.features, args.labels, args.gps, args.folds):
+    for path in (args.features, args.labels, args.candidate_summary, args.folds):
         if not path.is_file():
-            raise SystemExit(f"Missing input {path}. Run the pipeline in README.md first.")
+            raise SystemExit(f"Missing input {path}.")
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
 
     df = load_data(args.features, args.labels)
-    gps = load_gps_observations(args.gps)
-    gps = gps[gps.partition.isin(["train", "student_test"])]
-    require_complete_trips(df, gps)
+    summary = load_candidate_summary(args.candidate_summary)
+    require_complete_trips(df, summary)
     train = df[df["partition"] == "train"].reset_index(drop=True)
     test = df[df["partition"] == "student_test"].reset_index(drop=True)
-    train_gps = gps[gps.partition == "train"]
-    test_gps = gps[gps.partition == "student_test"]
-    folds = load_folds(args.folds, set(train_gps.trip_id))
+    train_summary = summary[summary.partition == "train"]
+    test_summary = summary[summary.partition == "student_test"]
+    folds = load_folds(args.folds, set(train_summary.trip_id))
     print(f"train rows {len(train)} ({train.trip_id.nunique()} trips), "
           f"student_test rows {len(test)} ({test.trip_id.nunique()} trips)")
     print("positive rate (train):", round(train["label"].mean(), 4))
 
     # ---- tuning and group-aware CV on the shared folds (split by trip) ----
     options = TUNING_OPTIONS[:1] if args.no_tune else TUNING_OPTIONS
-    params, cv, oof, tuning = tune(train, train_gps, folds, options)
+    params, cv, oof, tuning = tune(train, train_summary, folds, options)
     print("selected:", params)
     cv.to_csv(out / "cv_fold_metrics.csv", index=False)
     tuning.to_csv(out / "tuning_results.csv", index=False)
@@ -277,17 +282,17 @@ def main():
     # ---- final fit on all 80 training trips ----
     model, train_seconds = fit_model(train, params)
     train_prob = model.predict_proba(train[FEATURES])[:, 1]
-    train_metrics = evaluate(train, train_prob, train_gps)
+    train_metrics = evaluate(train, train_prob, train_summary)
 
     # ---- single evaluation on student-test, after all choices are fixed ----
     t0 = time.time()
     test_prob = model.predict_proba(test[FEATURES])[:, 1]
     infer_seconds = time.time() - t0
-    test_metrics = evaluate(test, test_prob, test_gps)
+    test_metrics = evaluate(test, test_prob, test_summary)
     test_metrics["inference_seconds_total"] = infer_seconds
     test_metrics["inference_ms_per_1000_rows"] = 1000 * infer_seconds / len(test) * 1000
 
-    summary = {
+    report = {
         "model": "RandomForestClassifier",
         "seed": SEED,
         "hyperparameters": params,
@@ -302,7 +307,7 @@ def main():
         "versions": {"python": platform.python_version(), "sklearn": sklearn.__version__,
                      "pandas": pd.__version__, "numpy": np.__version__},
     }
-    (out / "metrics.json").write_text(json.dumps(summary, indent=2, default=float))
+    (out / "metrics.json").write_text(json.dumps(report, indent=2, default=float))
     (out / "model_config.json").write_text(json.dumps(
         {"seed": SEED, "hyperparameters": params, "features": FEATURES}, indent=2))
 

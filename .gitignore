@@ -61,6 +61,9 @@ outputs/dataset_validation_report.md
 # Interactive Folium HTML maps (large, regenerable)
 outputs/maps/*.html
 
+# Shared validated dataset (large, distributed outside Git)
+PathSnap_Validated_Dataset/
+
 # Random Forest model and probability tables (large, regenerable)
 outputs/random_forest/rf_model.joblib
 outputs/random_forest/*_probabilities.csv
