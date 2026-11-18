@@ -256,7 +256,11 @@ def main():
     speed = ap.add_mutually_exclusive_group()
     speed.add_argument("--no-tune", action="store_true", help="train only the baseline")
     speed.add_argument("--fast", action="store_true", help="train one smaller, quicker forest")
+    ap.add_argument("--reuse-cv", action="store_true",
+                    help="with --no-tune or --fast, keep the CV results already in --out")
     args = ap.parse_args()
+    if args.reuse_cv and not (args.no_tune or args.fast):
+        raise SystemExit("--reuse-cv needs --no-tune or --fast.")
     for path in (args.features, args.labels, args.candidate_summary, args.folds):
         if not path.is_file():
             raise SystemExit(f"Missing input {path}.")
@@ -280,11 +284,20 @@ def main():
         options = [FAST_OPTION]
     else:
         options = TUNING_OPTIONS[:1] if args.no_tune else TUNING_OPTIONS
-    params, cv, oof, tuning = tune(train, train_summary, folds, options)
+    if args.reuse_cv:
+        for name in ("cv_fold_metrics.csv", "rf_train_oof_probabilities.csv"):
+            if not (out / name).is_file():
+                raise SystemExit(f"Cannot reuse CV: {out / name} is missing.")
+        params = {**BASE_PARAMS, **options[0]}
+        cv = pd.read_csv(out / "cv_fold_metrics.csv")
+        print("reusing saved CV results")
+    else:
+        params, cv, oof, tuning = tune(train, train_summary, folds, options)
+        cv.to_csv(out / "cv_fold_metrics.csv", index=False)
+        tuning.to_csv(out / "tuning_results.csv", index=False)
+        probability_table(train, oof).to_csv(out / "rf_train_oof_probabilities.csv",
+                                             index=False)
     print("selected:", params)
-    cv.to_csv(out / "cv_fold_metrics.csv", index=False)
-    tuning.to_csv(out / "tuning_results.csv", index=False)
-    probability_table(train, oof).to_csv(out / "rf_train_oof_probabilities.csv", index=False)
 
     # ---- final fit on all 80 training trips ----
     model, train_seconds = fit_model(train, params)

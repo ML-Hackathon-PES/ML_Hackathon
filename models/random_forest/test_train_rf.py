@@ -98,6 +98,10 @@ def check_fast_run(work):
     params = json.loads((work / "out" / "metrics.json").read_text())["hyperparameters"]
     assert params["n_estimators"] == 40 and params["max_samples"] == 0.25
 
+    result = run_script(work, "features.csv", "labels.csv", "--fast", "--reuse-cv")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "reusing saved CV results" in result.stdout and "option 1/1" not in result.stdout
+
 
 def check_incomplete_tables_stop(work, feats, labels, train_ids):
     keep = feats.trip_id != train_ids[0]
