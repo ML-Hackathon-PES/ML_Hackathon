@@ -74,24 +74,25 @@ Static trajectory figures contain all trips in each partition, in panels sorted 
 - `outputs/gps_cleaning_log.csv`: raw-versus-cleaned counts for every trip.
 - `outputs/cleaned_gps_samples.csv`: 25 cleaned observations per trip.
 - `outputs/gps_feature_table.csv`: cleaned observation-level basic features.
-- `outputs/dataset_splits.csv`: trip-level train, holdout, and student-test roles.
-- `outputs/cross_validation_folds.csv`: deterministic 5-fold assignments for the 64-trip training pool.
+- `outputs/dataset_splits.csv`: trip-level training-pool and student-test roles.
+- `outputs/cross_validation_folds.csv`: deterministic 5-fold assignments for all 80 train trips.
 - `outputs/figures/`: actual-data trajectory, distribution, and network plots.
 - `outputs/maps/`: interactive Folium maps based on selected trips.
 
 ## Cleaning and partition artifacts
 
-Raw files remain unchanged. Cleaning removed one observation across 227,577 input
-observations: train trip `00000079` had one observation above the documented 150 m/s
-speed threshold. It now contains 688 cleaned observations in the feature table.
-No missing, nonfinite, duplicate, or decreasing-timestamp observations were present
-before cleaning. The resulting cleaned feature table contains 227,576 observation rows.
+Raw files remain unchanged. Observations above 150 m/s are preserved and flagged.
+Train trip `00000079`, observation 90, has speed 180.14 m/s and is marked
+`speed_suspicious=1`. No missing, nonfinite, duplicate, or decreasing-timestamp
+observations were reported before preprocessing. The cleaned GPS feature table
+contains 227,577 observation rows from all 90 trips.
 
-The deterministic partition export assigns 64 train trips to the training pool,
-16 train trips to a validation holdout, and 10 student-test trips to development
-evaluation. All 64 training-pool trips are assigned exactly once to each fold's
-validation role across five folds. Student-test trips are not used for feature
-selection or cleaning-rule selection. No evaluator-testing partition was found locally.
+All 80 train trips form the cross-validation pool; there is no permanent holdout.
+Each deterministic fold assigns 64 trips to training and 16 to validation, with
+every train trip appearing in validation once across five folds. The 10
+student-test trips remain separate for development-stage evaluation and are not
+used for training, feature selection, or cleaning-rule selection. No
+evaluator-testing partition was found locally.
 
 ## Scope and limitations
 

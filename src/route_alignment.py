@@ -217,6 +217,9 @@ def run_alignment(
                     "defensively_aligned_observations": len({
                         observation_index for observation_index in nearest_by_observation
                     }),
+                    "unmatched_gps_observations": (
+                        len(trip_gps_rows) - len(nearest_by_observation)
+                    ),
                     "positive_candidate_labels": positive_labels,
                     "negative_candidate_labels": negative_labels,
                     "unlabeled_candidate_rows": unlabeled_observations,
@@ -233,6 +236,7 @@ def run_alignment(
     summary_fields = [
         "partition", "trip_id", "route_entries", "unique_reference_arc_ids",
         "gps_observations", "defensively_aligned_observations",
+        "unmatched_gps_observations",
         "positive_candidate_labels", "negative_candidate_labels",
         "unlabeled_candidate_rows", "reference_arc_ids_not_matched_to_a_gps",
         "candidate_miss_rate",
