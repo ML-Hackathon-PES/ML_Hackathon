@@ -1,0 +1,30 @@
+{
+  "partition": "student_test",
+  "emission_source": "distance_heading_baseline",
+  "network_source": "candidate_arcs_only",
+  "config": {
+    "transition_scale_meters": 10.0,
+    "break_penalty": 40.0,
+    "emission_weight": 1.0,
+    "distance_sigma_meters": 20.0,
+    "heading_sigma_degrees": 45.0,
+    "minimum_heading_speed_mps": 1.0
+  },
+  "classifier_only": {
+    "trips": 10,
+    "top1_accuracy": 0.7313775643367959,
+    "mean_trip_top1_accuracy": 0.7505478068667257,
+    "mean_route_arc_f1": 0.7746513179384669,
+    "route_breaks": 1269,
+    "route_continuity": 0.933733681462141
+  },
+  "hmm_viterbi": {
+    "trips": 10,
+    "top1_accuracy": 0.8082163177950619,
+    "mean_trip_top1_accuracy": 0.8322750401408381,
+    "mean_route_arc_f1": 0.8946566424080673,
+    "route_breaks": 54,
+    "route_continuity": 0.9971801566579634
+  },
+  "decode_seconds_total": 0.5285487998626195
+}
