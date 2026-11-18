@@ -12,7 +12,8 @@ the HMM/Viterbi step has emissions for the whole trip.
 Usage (from the repository root, with the tables in PathSnap_Validated_Dataset/):
     python models/random_forest/train_rf.py
 
-Add --no-tune to train only the baseline configuration.
+Add --no-tune to train only the baseline configuration, or --fast for a much
+quicker run with fewer trees, each built from a quarter of the training rows.
 """
 import argparse
 import json
@@ -59,6 +60,7 @@ TUNING_OPTIONS = [
     {"min_samples_leaf": 25},
     {"class_weight": "balanced_subsample"},
 ]
+FAST_OPTION = {"n_estimators": 40, "max_samples": 0.25}
 
 
 def make_model(params):
@@ -251,7 +253,9 @@ def main():
                     default=data / "candidate_generation_summary.csv")
     ap.add_argument("--folds", type=Path, default=outputs / "cross_validation_folds.csv")
     ap.add_argument("--out", type=Path, default=outputs / "random_forest")
-    ap.add_argument("--no-tune", action="store_true", help="train only the baseline")
+    speed = ap.add_mutually_exclusive_group()
+    speed.add_argument("--no-tune", action="store_true", help="train only the baseline")
+    speed.add_argument("--fast", action="store_true", help="train one smaller, quicker forest")
     args = ap.parse_args()
     for path in (args.features, args.labels, args.candidate_summary, args.folds):
         if not path.is_file():
@@ -272,7 +276,10 @@ def main():
     print("positive rate (train):", round(train["label"].mean(), 4))
 
     # ---- tuning and group-aware CV on the shared folds (split by trip) ----
-    options = TUNING_OPTIONS[:1] if args.no_tune else TUNING_OPTIONS
+    if args.fast:
+        options = [FAST_OPTION]
+    else:
+        options = TUNING_OPTIONS[:1] if args.no_tune else TUNING_OPTIONS
     params, cv, oof, tuning = tune(train, train_summary, folds, options)
     print("selected:", params)
     cv.to_csv(out / "cv_fold_metrics.csv", index=False)

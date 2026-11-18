@@ -92,6 +92,13 @@ def check_successful_run(work, feats):
         assert (out / name).is_file(), name
 
 
+def check_fast_run(work):
+    result = run_script(work, "features.csv", "labels.csv", "--fast")
+    assert result.returncode == 0, result.stdout + result.stderr
+    params = json.loads((work / "out" / "metrics.json").read_text())["hyperparameters"]
+    assert params["n_estimators"] == 40 and params["max_samples"] == 0.25
+
+
 def check_incomplete_tables_stop(work, feats, labels, train_ids):
     keep = feats.trip_id != train_ids[0]
     feats[keep].to_csv(work / "partial_features.csv", index=False)
@@ -112,6 +119,7 @@ def main():
         feats.to_csv(work / "features.csv", index=False)
         labels.to_csv(work / "labels.csv", index=False)
         check_successful_run(work, feats)
+        check_fast_run(work)
         check_incomplete_tables_stop(work, feats, labels, train_ids)
     print("ALL CHECKS PASSED")
 
