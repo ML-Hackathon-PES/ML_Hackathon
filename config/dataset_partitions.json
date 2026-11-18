@@ -1,0 +1,11 @@
+{
+  "train_partition": "train",
+  "student_test_partition": "student_test",
+  "evaluator_test_partition": "not_available_locally",
+  "training_pool_from_train": "all 80 trips",
+  "holdout": "none",
+  "cross_validation_folds": 5,
+  "cross_validation_pool": "80 train trips",
+  "student_test_usage": "development-stage evaluation only",
+  "evaluator_test_usage": "final evaluation only; never use labels or trips for tuning"
+}
