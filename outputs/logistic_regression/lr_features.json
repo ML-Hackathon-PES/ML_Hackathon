@@ -1,0 +1,17 @@
+[
+  "gps_to_segment_distance_meters",
+  "gps_to_segment_start_meters",
+  "gps_to_segment_end_meters",
+  "segment_length_meters",
+  "candidate_rank",
+  "candidate_count",
+  "gps_speed_mps",
+  "gps_movement_direction_degrees",
+  "previous_gps_speed_mps",
+  "previous_movement_direction_degrees",
+  "previous_delta_time_seconds",
+  "road_segment_direction_degrees",
+  "gps_road_direction_difference_degrees",
+  "delta_time_seconds",
+  "speed_suspicious"
+]

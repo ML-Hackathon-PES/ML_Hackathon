@@ -1,0 +1,11 @@
+{
+  "accuracy": 0.8379106393709452,
+  "precision": 0.583800536267716,
+  "recall": 0.8845098659913475,
+  "f1": 0.7033626313691762,
+  "roc_auc": 0.9303271989322246,
+  "avg_precision": 0.7938996551778454,
+  "top1_candidate_accuracy": 0.9979423868312757,
+  "inference_time_seconds": 0.04123810000237427,
+  "rows_evaluated": 87242
+}

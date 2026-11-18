@@ -71,3 +71,13 @@ desktop.ini
 .idea/
 .vscode/
 *.code-workspace
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Large generated model outputs (share via team storage)
+outputs/logistic_regression/lr_student_predictions.csv
+outputs/logistic_regression/*_confusion_matrix.png
+outputs/knn/
