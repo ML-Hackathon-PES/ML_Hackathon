@@ -1,13 +1,18 @@
 """PathSnap - Model 4: Random Forest candidate classifier.
 
-Reads the team's common tables, runs group-aware CV on the shared folds
-(80 training trips), refits on all 80 trips, evaluates on the 10 student-test
-trips, and saves metrics, plots, probabilities and the trained model.
+Reads the team's common tables, tunes hyperparameters with group-aware CV on the
+shared folds (80 training trips), refits the best configuration on all 80 trips,
+evaluates once on the 10 student-test trips, and saves metrics, plots,
+probabilities and the trained model.
 
-Usage:
-    python train_rf.py --features candidate_feature_table.csv \
-        --labels candidate_labels.csv --folds cross_validation_folds.csv \
-        --out rf_results
+Only labeled candidates are used for fitting and metrics. Every candidate gets a
+probability, including those at GPS points with no aligned reference route, so
+the HMM/Viterbi step has emissions for the whole trip.
+
+Usage (from the repository root, after pipeline steps 1-5 in README.md):
+    python models/random_forest/train_rf.py
+
+Add --no-tune to train only the baseline configuration.
 """
 import argparse
 import json
@@ -30,7 +35,9 @@ from sklearn.metrics import (ConfusionMatrixDisplay, accuracy_score, confusion_m
 from sklearn.pipeline import Pipeline
 
 SEED = 42
-KEYS = ["partition", "trip_id", "observation_index", "arc_id"]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+OBSERVATION_KEYS = ["partition", "trip_id", "observation_index"]
+KEYS = OBSERVATION_KEYS + ["arc_id"]
 # Common team features. Identifiers and absolute timestamp are excluded on purpose.
 FEATURES = [
     "gps_to_segment_distance_meters", "gps_to_segment_start_meters",
@@ -40,27 +47,71 @@ FEATURES = [
     "previous_delta_time_seconds", "road_segment_direction_degrees",
     "gps_road_direction_difference_degrees", "delta_time_seconds", "speed_suspicious",
 ]
-RF_PARAMS = dict(n_estimators=100, max_depth=20, min_samples_leaf=10,
-                 max_features="sqrt", class_weight=None, random_state=SEED, n_jobs=-1)
+BASE_PARAMS = dict(n_estimators=100, max_depth=20, min_samples_leaf=10,
+                   max_features="sqrt", class_weight=None, random_state=SEED, n_jobs=-1)
+# Each option changes one setting from the baseline. Log loss picks the winner
+# because the probabilities become HMM emission scores.
+TUNING_OPTIONS = [
+    {},
+    {"max_depth": 12},
+    {"max_depth": None},
+    {"min_samples_leaf": 5},
+    {"min_samples_leaf": 25},
+    {"class_weight": "balanced_subsample"},
+]
 
 
-def make_model():
+def make_model(params):
     return Pipeline([
         ("imputer", SimpleImputer(strategy="median")),  # fitted on training rows only
-        ("rf", RandomForestClassifier(**RF_PARAMS)),
+        ("rf", RandomForestClassifier(**params)),
     ])
 
 
 def load_data(features_path, labels_path):
-    feats = pd.read_csv(features_path, dtype={"trip_id": str})
-    labs = pd.read_csv(labels_path, dtype={"trip_id": str},
-                       usecols=KEYS + ["label"])
-    n_before = len(labs)
-    labs = labs.dropna(subset=["label"])  # unaligned observations are unlabeled
-    df = feats.merge(labs, on=KEYS, how="inner")
-    df["label"] = df["label"].astype(int)
-    print(f"label rows: {n_before}, labeled: {len(labs)}, after merge: {len(df)}")
-    return df.reset_index(drop=True)
+    """Return every candidate; `label` is NaN where no reference route aligned."""
+    feats = pd.read_csv(features_path, usecols=KEYS + FEATURES,
+                        dtype={"trip_id": str, **{c: "float32" for c in FEATURES}})
+    labs = pd.read_csv(labels_path, dtype={"trip_id": str}, usecols=KEYS + ["label"])
+    if len(feats) != len(labs):
+        raise SystemExit(f"Feature table has {len(feats)} rows but label table has "
+                         f"{len(labs)}. Regenerate both from the same candidate table.")
+    df = feats.merge(labs, on=KEYS, how="left", validate="one_to_one", indicator=True)
+    if (df["_merge"] != "both").any():
+        raise SystemExit("Feature and label tables contain different candidates. "
+                         "Regenerate both from the same candidate table.")
+    df = df.drop(columns="_merge")
+    print(f"candidates: {len(df)}, labeled: {int(df['label'].notna().sum())}")
+    return df
+
+
+def load_gps_observations(path):
+    return pd.read_csv(path, usecols=OBSERVATION_KEYS, dtype={"trip_id": str})
+
+
+def load_folds(path, train_trips):
+    """Read the shared folds and confirm they split the training trips correctly."""
+    folds = pd.read_csv(path, dtype={"trip_id": str})
+    validation_counts = folds[folds.cv_role == "validation"].trip_id.value_counts()
+    if set(folds.trip_id) != train_trips or set(validation_counts.index) != train_trips \
+            or (validation_counts != 1).any():
+        raise SystemExit("Folds must place each training trip in validation exactly once.")
+    for fold, group in folds.groupby("fold"):
+        roles = group.groupby("trip_id").cv_role.nunique()
+        if len(group) != len(train_trips) or (roles != 1).any():
+            raise SystemExit(f"Fold {fold} does not list each trip in one role.")
+    return folds
+
+
+def require_complete_trips(df, gps):
+    """Stop on partial tables, such as an interrupted candidate generation run."""
+    labeled = df[df["label"].notna()]
+    expected = set(map(tuple, gps[["partition", "trip_id"]].drop_duplicates().values))
+    found = set(map(tuple, labeled[["partition", "trip_id"]].drop_duplicates().values))
+    missing = sorted(expected - found)
+    if missing:
+        raise SystemExit(f"{len(missing)} of {len(expected)} trips have no labeled "
+                         f"candidates, first: {missing[0]}. Finish the data pipeline first.")
 
 
 def top1_accuracy(df, prob):
@@ -71,108 +122,103 @@ def top1_accuracy(df, prob):
     return float(best["label"].mean())
 
 
-def candidate_miss_rate(df):
+def true_arc_not_in_candidates_rate(df):
+    """Share of aligned GPS points whose reference arc is not a candidate."""
     g = df.groupby(["trip_id", "observation_index"])["label"].max()
     return float((g == 0).mean())
 
 
-def evaluate(df, prob):
-    y = df["label"].values
-    pred = (prob >= 0.5).astype(int)
+def coverage_metrics(candidates, gps):
+    """Coverage over all cleaned GPS points of the evaluated trips."""
+    with_candidates = len(candidates[OBSERVATION_KEYS].drop_duplicates())
+    labeled = candidates.loc[candidates["label"].notna(), OBSERVATION_KEYS]
+    return {
+        "gps_observations": len(gps),
+        # Same definition as candidate_generation_summary.csv.
+        "candidate_miss_rate": 1 - with_candidates / len(gps),
+        "labeled_observation_coverage": len(labeled.drop_duplicates()) / len(gps),
+    }
+
+
+def evaluate(candidates, prob, gps):
+    """Score labeled candidates and report coverage for the same trips."""
+    mask = candidates["label"].notna().values
+    df, p = candidates[mask], prob[mask]
+    y = df["label"].astype(int).values
+    pred = (p >= 0.5).astype(int)
     return {
         "accuracy": accuracy_score(y, pred),
         "precision": precision_score(y, pred, zero_division=0),
         "recall": recall_score(y, pred, zero_division=0),
         "f1_positive": f1_score(y, pred, zero_division=0),
         "macro_f1": f1_score(y, pred, average="macro", zero_division=0),
-        "log_loss": log_loss(y, np.clip(prob, 1e-15, 1 - 1e-15), labels=[0, 1]),
-        "top1_accuracy": top1_accuracy(df, prob),
-        "candidate_miss_rate": candidate_miss_rate(df),
+        "log_loss": log_loss(y, np.clip(p, 1e-15, 1 - 1e-15), labels=[0, 1]),
+        "top1_accuracy": top1_accuracy(df, p),
+        "true_arc_not_in_candidates_rate": true_arc_not_in_candidates_rate(df),
+        **coverage_metrics(candidates, gps),
     }
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--features", required=True)
-    ap.add_argument("--labels", required=True)
-    ap.add_argument("--folds", required=True)
-    ap.add_argument("--out", default="rf_results")
-    args = ap.parse_args()
-    out = Path(args.out)
-    out.mkdir(parents=True, exist_ok=True)
-
-    df = load_data(args.features, args.labels)
-    train = df[df["partition"] == "train"].reset_index(drop=True)
-    test = df[df["partition"] == "student_test"].reset_index(drop=True)
-    print(f"train rows {len(train)} ({train.trip_id.nunique()} trips), "
-          f"student_test rows {len(test)} ({test.trip_id.nunique()} trips)")
-    print("positive rate (train):", round(train["label"].mean(), 4))
-
-    # ---- group-aware CV on the team's shared folds (split by trip) ----
-    folds = pd.read_csv(args.folds, dtype={"trip_id": str})
-    cv_rows = []
-    for f, g in folds.groupby("fold"):
-        tr_trips = set(g.loc[g.cv_role == "training", "trip_id"])
-        va_trips = set(g.loc[g.cv_role == "validation", "trip_id"])
-        tr = train[train.trip_id.isin(tr_trips)]
-        va = train[train.trip_id.isin(va_trips)]
-        m = make_model()
-        t0 = time.time()
-        m.fit(tr[FEATURES], tr["label"])
-        fit_s = time.time() - t0
-        prob = m.predict_proba(va[FEATURES])[:, 1]
-        res = evaluate(va, prob)
-        res.update(fold=int(f), train_trips=len(tr_trips), val_trips=len(va_trips),
-                   fit_seconds=fit_s)
-        cv_rows.append(res)
-        print(f"fold {f}: macroF1={res['macro_f1']:.4f} top1={res['top1_accuracy']:.4f} "
-              f"logloss={res['log_loss']:.4f}")
-    cv = pd.DataFrame(cv_rows)
-    cv.to_csv(out / "cv_fold_metrics.csv", index=False)
-
-    # ---- final fit on all 80 training trips ----
-    model = make_model()
+def fit_model(rows, params):
+    labeled = rows[rows["label"].notna()]
+    model = make_model(params)
     t0 = time.time()
-    model.fit(train[FEATURES], train["label"])
-    train_seconds = time.time() - t0
+    model.fit(labeled[FEATURES], labeled["label"].astype(int))
+    return model, time.time() - t0
 
-    train_prob = model.predict_proba(train[FEATURES])[:, 1]
-    train_metrics = evaluate(train, train_prob)
 
-    t0 = time.time()
-    test_prob = model.predict_proba(test[FEATURES])[:, 1]
-    infer_seconds = time.time() - t0
-    test_metrics = evaluate(test, test_prob)
-    test_metrics["inference_seconds_total"] = infer_seconds
-    test_metrics["inference_ms_per_1000_rows"] = 1000 * infer_seconds / len(test) * 1000
+def cross_validate(train, train_gps, folds, params):
+    """Return per-fold metrics and an out-of-fold probability for each candidate."""
+    rows = []
+    oof = np.full(len(train), np.nan)
+    for fold, group in folds.groupby("fold"):
+        tr_trips = set(group.loc[group.cv_role == "training", "trip_id"])
+        va_trips = set(group.loc[group.cv_role == "validation", "trip_id"])
+        va_mask = train.trip_id.isin(va_trips).values
+        va = train[va_mask]
+        model, fit_seconds = fit_model(train[train.trip_id.isin(tr_trips)], params)
+        prob = model.predict_proba(va[FEATURES])[:, 1]
+        oof[va_mask] = prob
+        res = evaluate(va, prob, train_gps[train_gps.trip_id.isin(va_trips)])
+        res.update(fold=int(fold), train_trips=len(tr_trips), val_trips=len(va_trips),
+                   fit_seconds=fit_seconds)
+        rows.append(res)
+    return pd.DataFrame(rows), oof
 
-    summary = {
-        "model": "RandomForestClassifier",
-        "seed": SEED,
-        "hyperparameters": RF_PARAMS,
-        "features": FEATURES,
-        "cv_mean": cv.drop(columns=["fold"]).mean().to_dict(),
-        "cv_std": cv.drop(columns=["fold"]).std().to_dict(),
-        "train_fit_seconds": train_seconds,
-        "train_set_metrics": train_metrics,
-        "student_test_metrics": test_metrics,
-        "route_continuity": "N/A for classifier alone (needs HMM/Viterbi route)",
-        "versions": {"python": platform.python_version(), "sklearn": sklearn.__version__,
-                     "pandas": pd.__version__, "numpy": np.__version__},
-    }
-    (out / "metrics.json").write_text(json.dumps(summary, indent=2, default=float))
-    (out / "model_config.json").write_text(json.dumps(
-        {"seed": SEED, "hyperparameters": RF_PARAMS, "features": FEATURES}, indent=2))
 
-    # probabilities for the HMM/Viterbi teammate
-    probs = test[KEYS + ["label"]].copy()
-    probs["rf_probability"] = test_prob
-    probs.to_csv(out / "rf_student_test_probabilities.csv", index=False)
+def tune(train, train_gps, folds, options):
+    """Pick the option with the lowest mean validation log loss."""
+    best = None
+    results = []
+    for number, option in enumerate(options, start=1):
+        params = {**BASE_PARAMS, **option}
+        cv, oof = cross_validate(train, train_gps, folds, params)
+        score = cv["log_loss"].mean()
+        results.append({"option": json.dumps(option), "mean_log_loss": score,
+                        "std_log_loss": cv["log_loss"].std(),
+                        "mean_macro_f1": cv["macro_f1"].mean(),
+                        "mean_top1_accuracy": cv["top1_accuracy"].mean(),
+                        "mean_fit_seconds": cv["fit_seconds"].mean()})
+        print(f"option {number}/{len(options)} {option or 'baseline'}: "
+              f"logloss={score:.4f} macroF1={cv['macro_f1'].mean():.4f} "
+              f"top1={cv['top1_accuracy'].mean():.4f}")
+        if best is None or score < best[0]:
+            best = (score, params, cv, oof)
+    table = pd.DataFrame(results).sort_values("mean_log_loss")
+    return best[1], best[2], best[3], table
 
-    joblib.dump(model, out / "rf_model.joblib", compress=3)
 
-    # ---- plots (actual results only) ----
-    cm = confusion_matrix(test["label"], (test_prob >= 0.5).astype(int), labels=[0, 1])
+def probability_table(rows, prob):
+    table = rows[KEYS + ["label"]].copy()
+    table["label"] = table["label"].astype("Int64")
+    table["rf_probability"] = prob
+    return table
+
+
+def save_plots(out, test, test_prob, cv, model):
+    labeled = test["label"].notna().values
+    cm = confusion_matrix(test.loc[labeled, "label"].astype(int),
+                          (test_prob[labeled] >= 0.5).astype(int), labels=[0, 1])
     ConfusionMatrixDisplay(cm, display_labels=["not true arc", "true arc"]).plot(
         cmap="Blues", values_format="d")
     plt.title("Random Forest - confusion matrix (student-test)")
@@ -188,6 +234,83 @@ def main():
     plt.figure(figsize=(7, 5)); imp.plot.barh(color="#59a14f")
     plt.title("Random Forest - feature importance"); plt.tight_layout()
     plt.savefig(out / "feature_importance.png", dpi=150); plt.close()
+
+
+def main():
+    outputs = REPO_ROOT / "outputs"
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--features", type=Path, default=outputs / "candidate_feature_table.csv")
+    ap.add_argument("--labels", type=Path, default=outputs / "candidate_labels.csv")
+    ap.add_argument("--gps", type=Path, default=outputs / "gps_feature_table.csv")
+    ap.add_argument("--folds", type=Path, default=outputs / "cross_validation_folds.csv")
+    ap.add_argument("--out", type=Path, default=outputs / "random_forest")
+    ap.add_argument("--no-tune", action="store_true", help="train only the baseline")
+    args = ap.parse_args()
+    for path in (args.features, args.labels, args.gps, args.folds):
+        if not path.is_file():
+            raise SystemExit(f"Missing input {path}. Run the pipeline in README.md first.")
+    out = args.out
+    out.mkdir(parents=True, exist_ok=True)
+
+    df = load_data(args.features, args.labels)
+    gps = load_gps_observations(args.gps)
+    gps = gps[gps.partition.isin(["train", "student_test"])]
+    require_complete_trips(df, gps)
+    train = df[df["partition"] == "train"].reset_index(drop=True)
+    test = df[df["partition"] == "student_test"].reset_index(drop=True)
+    train_gps = gps[gps.partition == "train"]
+    test_gps = gps[gps.partition == "student_test"]
+    folds = load_folds(args.folds, set(train_gps.trip_id))
+    print(f"train rows {len(train)} ({train.trip_id.nunique()} trips), "
+          f"student_test rows {len(test)} ({test.trip_id.nunique()} trips)")
+    print("positive rate (train):", round(train["label"].mean(), 4))
+
+    # ---- tuning and group-aware CV on the shared folds (split by trip) ----
+    options = TUNING_OPTIONS[:1] if args.no_tune else TUNING_OPTIONS
+    params, cv, oof, tuning = tune(train, train_gps, folds, options)
+    print("selected:", params)
+    cv.to_csv(out / "cv_fold_metrics.csv", index=False)
+    tuning.to_csv(out / "tuning_results.csv", index=False)
+    probability_table(train, oof).to_csv(out / "rf_train_oof_probabilities.csv", index=False)
+
+    # ---- final fit on all 80 training trips ----
+    model, train_seconds = fit_model(train, params)
+    train_prob = model.predict_proba(train[FEATURES])[:, 1]
+    train_metrics = evaluate(train, train_prob, train_gps)
+
+    # ---- single evaluation on student-test, after all choices are fixed ----
+    t0 = time.time()
+    test_prob = model.predict_proba(test[FEATURES])[:, 1]
+    infer_seconds = time.time() - t0
+    test_metrics = evaluate(test, test_prob, test_gps)
+    test_metrics["inference_seconds_total"] = infer_seconds
+    test_metrics["inference_ms_per_1000_rows"] = 1000 * infer_seconds / len(test) * 1000
+
+    summary = {
+        "model": "RandomForestClassifier",
+        "seed": SEED,
+        "hyperparameters": params,
+        "tuning_metric": "mean CV log loss",
+        "features": FEATURES,
+        "cv_mean": cv.drop(columns=["fold"]).mean().to_dict(),
+        "cv_std": cv.drop(columns=["fold"]).std().to_dict(),
+        "train_fit_seconds": train_seconds,
+        "train_set_metrics": train_metrics,
+        "student_test_metrics": test_metrics,
+        "route_continuity": "N/A for classifier alone (needs HMM/Viterbi route)",
+        "versions": {"python": platform.python_version(), "sklearn": sklearn.__version__,
+                     "pandas": pd.__version__, "numpy": np.__version__},
+    }
+    (out / "metrics.json").write_text(json.dumps(summary, indent=2, default=float))
+    (out / "model_config.json").write_text(json.dumps(
+        {"seed": SEED, "hyperparameters": params, "features": FEATURES}, indent=2))
+
+    # probabilities for the HMM/Viterbi step
+    probability_table(test, test_prob).to_csv(out / "rf_student_test_probabilities.csv",
+                                              index=False)
+    joblib.dump(model, out / "rf_model.joblib", compress=3)
+    save_plots(out, test, test_prob, cv, model)
 
     print("\nCV macro F1: %.4f +/- %.4f" % (cv.macro_f1.mean(), cv.macro_f1.std()))
     print("Train  macroF1 %.4f top1 %.4f" % (train_metrics["macro_f1"], train_metrics["top1_accuracy"]))
